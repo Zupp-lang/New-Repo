@@ -34,8 +34,10 @@ local({
   for (dv in outcomes) {
     if (!(dv %in% names(D))) next
     y <- as.numeric(D[[dv]]); y[!is.na(y) & y < 0] <- NA
-    lag_name <- paste0(gsub("_ASINH$","",dv), "_LAG1")
-    rhs <- intersect(c(controls_base, lag_name, "EVENTTIME"), names(D))
+    # CHANGED (Bug 3 fix): lag_name removed from rhs -- lag vars are never used in
+    # regressions (70% missingness destroys the sample) so including them in
+    # model-readiness checks produced misleading "not model-ready" flags.
+    rhs <- intersect(c(controls_base, "EVENTTIME"), names(D))
     cols <- unique(c(rhs, fe_vars))
     mask <- complete.cases(D[, cols, drop = FALSE]) & !is.na(y)
     n_ready <- sum(mask)

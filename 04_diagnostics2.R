@@ -66,14 +66,18 @@ model_ready_mask <- function(D, yvar) {
   base_mask & !is.na(y)
 }
 
-D <- read.csv(file_panel, check.names = FALSE, stringsAsFactors = FALSE)
+D_raw <- read.csv(file_panel, check.names = FALSE, stringsAsFactors = FALSE)
 for (v in unique(c("TREATED_STATE", "EVENTTIME", "CALYR", "N_children", "TEHC_ST", "TREAT_ONSET",
                    covars_balance, outcomes_plot, binary_outcomes, controls_base, "TPAYWK"))) {
-  if (v %in% names(D)) D[[v]] <- as.numeric(D[[v]])
+  if (v %in% names(D_raw)) D_raw[[v]] <- as.numeric(D_raw[[v]])
 }
-D <- D[!is.na(D$N_children) & D$N_children > 0, , drop = FALSE]
+D_raw <- D_raw[!is.na(D_raw$N_children) & D_raw$N_children > 0, , drop = FALSE]
+# D_raw retains all years including excluded ones (e.g. 2020) for visual reference
+# in trend plots. D is the analysis dataset with excluded years removed.
+D <- D_raw
 if (length(exclude_years)) D <- D[!(D$CALYR %in% exclude_years), , drop = FALSE]
 
+for (v in intersect(binary_outcomes, names(D_raw))) D_raw[[v]] <- recode_binary_12(D_raw[[v]])
 for (v in intersect(binary_outcomes, names(D))) D[[v]] <- recode_binary_12(D[[v]])
 
 if (!"TREAT_ONSET" %in% names(D) || all(is.na(D$TREAT_ONSET[D$TREATED_STATE == 1]))) {
@@ -107,19 +111,21 @@ if (!length(covars_present)) {
 # 2) Trends and non-missing (all outcomes in one file)
 trend_rows <- list(); k <- 1L
 for (yvar in outcomes_plot) {
-  if (!(yvar %in% names(D))) next
-  y <- as.numeric(D[[yvar]])
-  if (yvar %in% binary_outcomes) y <- recode_binary_12(y) else y[!is.na(y) & y < 0] <- NA_real_
+  if (!(yvar %in% names(D_raw))) next
+  # Use D_raw so excluded years (e.g. 2020) appear in the trend data table
+  y_raw <- as.numeric(D_raw[[yvar]])
+  if (yvar %in% binary_outcomes) y_raw <- recode_binary_12(y_raw) else y_raw[!is.na(y_raw) & y_raw < 0] <- NA_real_
   
-  for (yr in sort(unique(D$CALYR))) {
-    mt <- mean(y[D$CALYR == yr & D$TREATED_STATE == 1], na.rm = TRUE)
-    mc <- mean(y[D$CALYR == yr & D$TREATED_STATE == 0], na.rm = TRUE)
+  for (yr in sort(unique(D_raw$CALYR))) {
+    mt <- mean(y_raw[D_raw$CALYR == yr & D_raw$TREATED_STATE == 1], na.rm = TRUE)
+    mc <- mean(y_raw[D_raw$CALYR == yr & D_raw$TREATED_STATE == 0], na.rm = TRUE)
     trend_rows[[k]] <- data.frame(
       outcome = yvar, CALYR = yr,
+      excluded_year = as.integer(yr %in% exclude_years),
       mean_treat = ifelse(is.nan(mt), NA_real_, mt),
       mean_ctrl = ifelse(is.nan(mc), NA_real_, mc),
-      nonmiss_treat = sum(!is.na(y[D$CALYR == yr & D$TREATED_STATE == 1])),
-      nonmiss_ctrl = sum(!is.na(y[D$CALYR == yr & D$TREATED_STATE == 0])),
+      nonmiss_treat = sum(!is.na(y_raw[D_raw$CALYR == yr & D_raw$TREATED_STATE == 1])),
+      nonmiss_ctrl = sum(!is.na(y_raw[D_raw$CALYR == yr & D_raw$TREATED_STATE == 0])),
       stringsAsFactors = FALSE
     )
     k <- k + 1L
@@ -211,8 +217,15 @@ if (nrow(trends_tbl)) {
          ylim = yrng, xlab = "Reference year", ylab = paste("Mean", yvar),
          main = paste("Trend diagnostics:", yvar))
     lines(DD$CALYR, DD$mean_ctrl, type = "b", lwd = 2, pch = 17, col = "#ff7f0e")
-    legend("topleft", legend = c("Treated", "Control"), col = c("#1f77b4", "#ff7f0e"),
-           lwd = 2, pch = c(16, 17), bty = "n")
+    # Mark excluded years (e.g. 2020) with a shaded band -- shown but not used in analysis
+    excl_yrs_in_plot <- if ("excluded_year" %in% names(DD)) DD$CALYR[DD$excluded_year == 1] else integer(0)
+    for (ey in excl_yrs_in_plot) {
+      rect(ey - 0.4, yrng[1] - 0.01, ey + 0.4, yrng[2] + 0.01,
+           col = rgb(0.9, 0.9, 0.3, 0.3), border = NA)
+      mtext(paste0("excl."), at = ey, side = 1, line = 2, cex = 0.7, col = "gray50")
+    }
+    legend("topleft", legend = c("Treated", "Control"),
+           col = c("#1f77b4", "#ff7f0e"), lwd = 2, pch = c(16, 17), bty = "n")
     abline(v = earliest_onset - 0.5, lty = 3, col = "gray40")
     grid()
   }
@@ -220,6 +233,30 @@ if (nrow(trends_tbl)) {
   plot.new(); title("No trend data available")
 }
 dev.off()
+
+# SCM donor pool summary -- print which states qualify and HH counts per year
+if ("TEHC_ST" %in% names(D_raw)) {
+  scm_exclude <- as.integer(strsplit(cfg$SCM_EXCLUDE_DONORS %||% "6,9,10,44", ",", fixed = TRUE)[[1]])
+  pre_years_scm <- seq.int(scm_pre_start, scm_pre_end)
+  states_all <- sort(unique(D_raw$TEHC_ST[!is.na(D_raw$TEHC_ST)]))
+  cat("\n== SCM DONOR POOL SUMMARY ==\n")
+  cat(sprintf("Pre-period: %d-%d | Min HH/state/year: %d | Excluded FIPS: %s\n",
+              scm_pre_start, scm_pre_end, scm_min_hh, paste(scm_exclude, collapse = ",")))
+  cat(sprintf("%-6s  %-8s  %-10s  %-8s  %-8s\n", "FIPS", "Treated", "AllYrsPres", "MinHH", "Eligible"))
+  for (st in states_all) {
+    by_yr <- sapply(pre_years_scm, function(yr)
+      length(unique(as.character(D_raw$SSUID[D_raw$TEHC_ST == st & D_raw$CALYR == yr]))))
+    all_pres <- all(pre_years_scm %in% D_raw$CALYR[D_raw$TEHC_ST == st])
+    is_excl  <- st %in% scm_exclude
+    eligible <- !is_excl && all_pres && all(by_yr >= scm_min_hh)
+    cat(sprintf("%-6d  %-8s  %-10s  %-8d  %-8s\n",
+                st,
+                ifelse(is_excl, "YES", "no"),
+                ifelse(all_pres, "yes", "NO"),
+                min(by_yr, na.rm = TRUE),
+                ifelse(eligible, "DONOR", "-")))
+  }
+}
 
 # Write consolidated outputs (<= 15 files total; here 6 files)
 write.csv(balance_tbl, file.path(out_folder, "diag_balance_pre.csv"), row.names = FALSE)

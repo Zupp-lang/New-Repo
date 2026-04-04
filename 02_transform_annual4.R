@@ -346,7 +346,11 @@ for (yr in years) {
         month_keys <- unique(hh_month_key)
         month_id <- match(hh_month_key, month_keys)
         tp_month <- as.numeric(tapply(vals, month_id, max_or_na))
-        month_hh <- sub(".*$", "", month_keys)
+        # CHANGED (Bug 2 fix): was sub("\x02.*$", "", month_keys) which failed to strip
+        # monthcode suffix (the \x02 anchor never matches), leaving month_hh equal
+        # to month_keys rather than HHKEY_raw, so month_hh_id was mostly NA.
+        # Correct: recover HHKEY_raw for each unique month key via first matching row.
+        month_hh <- HHKEY_raw[match(month_keys, hh_month_key)]
         month_hh_id <- match(month_hh, HH$HHKEY)
         HH[[v]] <- as.numeric(tapply(tp_month, month_hh_id, mean_or_na))
       } else {

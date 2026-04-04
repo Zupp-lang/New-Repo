@@ -61,10 +61,7 @@ controls_base <- strsplit(cfg$CONTROLS, ",", fixed = TRUE)[[1]]
 balance_methods <- strsplit(cfg$BALANCE_METHODS %||% "none", ",", fixed = TRUE)[[1]]
 balance_covars  <- strsplit(cfg$BALANCE_COVARS %||% cfg$CONTROLS, ",", fixed = TRUE)[[1]]
 smd_warn        <- as.numeric(cfg$SMD_WARN_THRESHOLD %||% "0.10")
-scm_treat_state <- as.integer(cfg$SCM_TREAT_STATE %||% "6")
-scm_pre_start   <- as.integer(cfg$SCM_PRE_START %||% "2014")
-scm_pre_end     <- as.integer(cfg$SCM_PRE_END %||% "2019")
-scm_min_hh      <- as.integer(cfg$SCM_MIN_HH_PER_STATE_YEAR %||% "5")
+# CHANGED: SCM config vars removed -- SCM analysis is now in 03b_scm.R
 
 # Event study parameters
 max_event_abs <- as.integer(cfg$MAX_EVENT_ABS %||% "3")
@@ -95,7 +92,7 @@ cat("[config] controls:        ", paste(controls_base, collapse = ", "), "\n")
 cat("[config] balance methods: ", paste(balance_methods, collapse = ", "), "\n")
 cat("[config] max_event_abs:   ", max_event_abs, "\n")
 cat("[config] ref_event:       ", ref_event, "\n")
-cat("[config] scm treat/pre:   state ", scm_treat_state, ", ", scm_pre_start, "-", scm_pre_end, "\n", sep = "")
+# CHANGED: SCM config print removed
 if (length(exclude_years)) {
   cat("[config] EXCLUDE_YEARS:   ", paste(exclude_years, collapse = ","), "\n")
 } else {
@@ -207,85 +204,7 @@ compute_smd <- function(xt, xc, wt = NULL, wc = NULL) {
   if (!is.finite(denom) || denom == 0) NA_real_ else (mt - mc) / denom
 }
 
-# ── Synthetic control weights (state-year, Abadie-style) ─────────────
-
-compute_scm_state_weights <- function(D, outcome_vars, predictor_vars,
-                                      treat_state = 6,
-                                      pre_start = 2014, pre_end = 2019,
-                                      min_hh_per_state_year = 5) {
-  req <- intersect(c("TEHC_ST", "CALYR", "SSUID", outcome_vars, predictor_vars), names(D))
-  X <- D[, req, drop = FALSE]
-  
-  # Collapse to state-year means + HH counts
-  states <- sort(unique(X$TEHC_ST[!is.na(X$TEHC_ST)]))
-  years  <- sort(unique(X$CALYR[!is.na(X$CALYR)]))
-  sy_rows <- list()
-  idx <- 1L
-  for (st in states) {
-    for (yr in years) {
-      m <- X$TEHC_ST == st & X$CALYR == yr
-      m[is.na(m)] <- FALSE
-      if (!any(m)) next
-      row <- data.frame(TEHC_ST = st, CALYR = yr,
-                        N_hh = length(unique(as.character(X$SSUID[m]))),
-                        stringsAsFactors = FALSE)
-      for (v in unique(c(outcome_vars, predictor_vars))) {
-        if (v %in% names(X)) row[[v]] <- mean(as.numeric(X[[v]][m]), na.rm = TRUE)
-      }
-      sy_rows[[idx]] <- row
-      idx <- idx + 1L
-    }
-  }
-  if (!length(sy_rows)) return(NULL)
-  SY <- do.call(rbind, sy_rows)
-  
-  pre_years <- seq.int(pre_start, pre_end)
-  if (length(pre_years) < 3)
-    cat(sprintf("    NOTE: Only %d SCM pre-period years — interpret cautiously.\n", length(pre_years)))
-  SY_pre <- SY[SY$CALYR %in% pre_years, , drop = FALSE]
-  if (!nrow(SY_pre)) return(NULL)
-  
-  donor_states <- setdiff(unique(SY_pre$TEHC_ST), treat_state)
-  donor_keep <- donor_states[sapply(donor_states, function(st) {
-    ss <- SY_pre[SY_pre$TEHC_ST == st, , drop = FALSE]
-    all(pre_years %in% ss$CALYR) && all(ss$N_hh[match(pre_years, ss$CALYR)] >= min_hh_per_state_year)
-  })]
-  
-  treat_pre <- SY_pre[SY_pre$TEHC_ST == treat_state, , drop = FALSE]
-  if (!nrow(treat_pre) || !all(pre_years %in% treat_pre$CALYR) || !length(donor_keep)) return(NULL)
-  
-  # Build predictors: outcome lags by year + average predictors over pre-period
-  outcome_use <- intersect(outcome_vars, names(SY_pre))
-  pred_use <- intersect(predictor_vars, names(SY_pre))
-  
-  make_vec <- function(state_id) {
-    ss <- SY_pre[SY_pre$TEHC_ST == state_id, , drop = FALSE]
-    ss <- ss[match(pre_years, ss$CALYR), , drop = FALSE]
-    vec <- c()
-    for (ov in outcome_use) vec <- c(vec, as.numeric(ss[[ov]]))
-    for (pv in pred_use) vec <- c(vec, mean(as.numeric(ss[[pv]]), na.rm = TRUE))
-    vec[!is.finite(vec)] <- mean(vec[is.finite(vec)], na.rm = TRUE)
-    vec
-  }
-  
-  x_t <- make_vec(treat_state)
-  X_d <- sapply(donor_keep, make_vec)
-  if (is.null(dim(X_d))) X_d <- matrix(X_d, ncol = 1)
-  
-  # Minimize ||x_t - X_d w||^2 with simplex weights via softmax parameterization
-  obj <- function(theta) {
-    exp_t <- exp(theta - max(theta))
-    w <- exp_t / sum(exp_t)
-    fit <- as.numeric(X_d %*% w)
-    sum((x_t - fit)^2)
-  }
-  opt <- tryCatch(optim(rep(0, ncol(X_d)), obj, method = "BFGS"), error = function(e) NULL)
-  if (is.null(opt)) return(NULL)
-  exp_t <- exp(opt$par - max(opt$par))
-  w <- exp_t / sum(exp_t)
-  names(w) <- as.character(donor_keep)
-  w
-}
+# CHANGED: compute_scm_state_weights() removed -- SCM is now standalone in 03b_scm.R
 
 # ── Overlap trimming via propensity score ───────────────────────────
 
@@ -473,10 +392,7 @@ all_pretrend       <- list()   # pretrend test results
 all_did            <- list()   # simple DiD results
 
 for (method in balance_methods) {
-  if (method == "entropy_balance") {
-    cat("  note: method 'entropy_balance' is deprecated; using synthetic_control instead.\n")
-    method <- "synthetic_control"
-  }
+  # CHANGED: entropy_balance redirect removed -- method deprecated
   
   cat("\n\n")
   cat("################################################################\n")
@@ -487,44 +403,8 @@ for (method in balance_methods) {
   
   M$w_bal <- 1.0  # default: unit weights
   
-  if (method == "synthetic_control") {
-    cat("\n  Computing synthetic-control weights on state-year pre-period...\n")
-    out_for_scm <- intersect(c(primary_outcome, "TPAYWK"), names(M))
-    pred_for_scm <- intersect(c(balance_covars, controls_base), names(M))
-# Auto-narrow SCM pre-period to years actually in data
-    actual_years <- sort(unique(M_method$CALYR[!is.na(M_method$CALYR)]))
-    scm_pre_avail <- intersect(seq.int(scm_pre_start, scm_pre_end), actual_years)
-    if (length(scm_pre_avail) < length(seq.int(scm_pre_start, scm_pre_end))) {
-      cat(sprintf("    WARNING: SCM pre-period narrowed from %d-%d to {%s}\n",
-                  scm_pre_start, scm_pre_end, paste(scm_pre_avail, collapse=",")))
-    }
-    scm_ps <- if (length(scm_pre_avail) >= 2) min(scm_pre_avail) else scm_pre_start
-    scm_pe <- if (length(scm_pre_avail) >= 2) max(scm_pre_avail) else scm_pre_end
-    
-    scm_w <- compute_scm_state_weights(
-      M,
-      outcome_vars = out_for_scm,
-      predictor_vars = pred_for_scm,
-      treat_state = scm_treat_state,
-      pre_start = scm_ps,
-      pre_end = scm_pe,
-      min_hh_per_state_year = scm_min_hh
-    )
-    
-    if (!is.null(scm_w) && length(scm_w)) {
-      donor_states <- as.numeric(names(scm_w))
-      M$w_bal <- ifelse(M$TEHC_ST == scm_treat_state, 1.0,
-                        ifelse(M$TEHC_ST %in% donor_states,
-                               as.numeric(scm_w[as.character(M$TEHC_ST)]),
-                               NA_real_))
-      cat(sprintf("    SCM donor states: %d, min=%.4f, median=%.4f, max=%.4f\n",
-                  length(scm_w), min(scm_w), median(scm_w), max(scm_w)))
-    } else {
-      cat("    SCM weight construction failed; leaving unit weights.\n")
-      M$w_bal <- 1.0
-    }
-    
-  } else if (method == "overlap_trim") {
+  # CHANGED: synthetic_control DiD weighting removed -- SCM is now standalone in 03b_scm.R
+  if (method == "overlap_trim") {
     cat("\n  Computing overlap-trimmed sample...\n")
     ov <- compute_overlap_weights(M, balance_covars)
     M$w_bal <- ifelse(ov$keep, 1.0, NA_real_)
@@ -563,7 +443,7 @@ for (method in balance_methods) {
     if (nrow(M_sub) == 0 || n_cl < 2 || n_t == 0) next
     
     rhs <- c("TREAT", ctrls)
-    use_wts <- if (method %in% c("synthetic_control")) TRUE else FALSE
+    use_wts <- FALSE  # CHANGED: synthetic_control removed; overlap_trim uses no weights
     fit <- tryCatch({
       if (use_wts) {
         feols(build_formula("Y_did", rhs, c("SSUID_f", "CALYR_f")),
@@ -605,7 +485,7 @@ for (method in balance_methods) {
     if (nrow(M_sub) == 0) next
     
     rhs <- c("i(EVENT_COMP, TREATED_STATE, ref = 'ref')", ctrls)
-    use_wts <- method == "synthetic_control"
+    use_wts <- FALSE  # CHANGED: synthetic_control removed
     fit <- tryCatch({
       if (use_wts) {
         feols(build_formula("Y_comp", rhs, c("SSUID_f", "CALYR_f")),
@@ -665,7 +545,7 @@ for (method in balance_methods) {
     }
     
     rhs <- c(sprintf("i(EVENT_BIN_USE, TREATED_STATE, ref = %d)", ref_use), ctrls)
-    use_wts <- method == "synthetic_control"
+    use_wts <- FALSE  # CHANGED: synthetic_control removed
     fit <- tryCatch({
       if (use_wts) {
         feols(build_formula("Y_es", rhs, c("SSUID_f", "CALYR_f")),

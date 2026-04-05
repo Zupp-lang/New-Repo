@@ -77,8 +77,17 @@ D_raw <- D_raw[!is.na(D_raw$N_children) & D_raw$N_children > 0, , drop = FALSE]
 D <- D_raw
 if (length(exclude_years)) D <- D[!(D$CALYR %in% exclude_years), , drop = FALSE]
 
-for (v in intersect(binary_outcomes, names(D_raw))) D_raw[[v]] <- recode_binary_12(D_raw[[v]])
-for (v in intersect(binary_outcomes, names(D))) D[[v]] <- recode_binary_12(D[[v]])
+# NOTE: Binary outcomes are already recoded to 0/1 in 02_transform_annual4.R.
+# Do NOT re-apply recode_binary_12 here — it would map 0→NA (since 0≠1 and 0≠2),
+# destroying all "no" responses. Instead, just ensure numeric type and clean negatives.
+for (v in intersect(binary_outcomes, names(D_raw))) {
+  D_raw[[v]] <- as.numeric(D_raw[[v]])
+  D_raw[[v]][!is.na(D_raw[[v]]) & D_raw[[v]] < 0] <- NA_real_
+}
+for (v in intersect(binary_outcomes, names(D))) {
+  D[[v]] <- as.numeric(D[[v]])
+  D[[v]][!is.na(D[[v]]) & D[[v]] < 0] <- NA_real_
+}
 
 if (!"TREAT_ONSET" %in% names(D) || all(is.na(D$TREAT_ONSET[D$TREATED_STATE == 1]))) {
   earliest_onset <- min(D$CALYR[D$TREATED_STATE == 1], na.rm = TRUE)
@@ -114,7 +123,8 @@ for (yvar in outcomes_plot) {
   if (!(yvar %in% names(D_raw))) next
   # Use D_raw so excluded years (e.g. 2020) appear in the trend data table
   y_raw <- as.numeric(D_raw[[yvar]])
-  if (yvar %in% binary_outcomes) y_raw <- recode_binary_12(y_raw) else y_raw[!is.na(y_raw) & y_raw < 0] <- NA_real_
+  # Binary outcomes already recoded to 0/1 upstream; just clean negatives
+  y_raw[!is.na(y_raw) & y_raw < 0] <- NA_real_
   
   for (yr in sort(unique(D_raw$CALYR))) {
     mt <- mean(y_raw[D_raw$CALYR == yr & D_raw$TREATED_STATE == 1], na.rm = TRUE)
